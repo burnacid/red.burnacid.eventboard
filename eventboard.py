@@ -15,7 +15,8 @@ from redbot.core.utils.predicates import ReactionPredicate
 
 from .helpers import (
     get_event_embed,
-    create_event_reactions
+    create_event_reactions,
+    valid_image
 )
 
 import asyncio
@@ -57,7 +58,7 @@ class Eventboard(commands.Cog):
                 if guild is None:
                     continue
                 data = await self.config.guild(guild).events()
-                for user_id, event_data in data.items():
+                for post_id, event_data in data.items():
                     try:
                         event = event_data
                     except (TypeError, KeyError, discord.errors.Forbidden):
@@ -65,7 +66,7 @@ class Eventboard(commands.Cog):
                         continue
                     if event is None:
                         return
-                    self.event_cache[guild_id][event["post_id"]] = event
+                    self.event_cache[guild_id][post_id] = event
         except Exception as e:
             log.error("Error loading events", exc_info=e)
 
@@ -120,7 +121,6 @@ class Eventboard(commands.Cog):
         if event_channel is None:
             embed=discord.Embed(title="Error stopping event creation", description="There is no event channel set on the server!", color=0xff0000)
             await dmchannel.send(embed=embed)
-            await commandmsg.delete()
             return
 
         # Get event ID
@@ -141,14 +141,12 @@ class Eventboard(commands.Cog):
             msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
-            await commandmsg.delete()
             return
         else:
             name = msg.content[0:199]
             if len(name) <= 3:
                 embed=discord.Embed(title="Error stopping event creation", description="This title is to short. Try again with atleast 3 characters!", color=0xff0000)
                 await dmchannel.send(embed=embed)
-                await commandmsg.delete()
                 return
 
         # Prompt Description
@@ -158,11 +156,10 @@ class Eventboard(commands.Cog):
             msg = await self.bot.wait_for("message", check=same_author_check, timeout=600)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
-            await commandmsg.delete()
             return
         else:
             description = msg.content[0:1599]
-            if description == "none":
+            if description.lower() == "none":
                 description = None
             
         # max number of attendees
@@ -172,7 +169,6 @@ class Eventboard(commands.Cog):
             msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
-            await commandmsg.delete()
             return
         else:
             numAttendees = msg.content
@@ -186,7 +182,6 @@ class Eventboard(commands.Cog):
             msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
-            await commandmsg.delete()
             return
         else:
             startDateTimeInput = msg.content
@@ -195,20 +190,36 @@ class Eventboard(commands.Cog):
             if not pattern.match(startDateTimeInput):
                 embed=discord.Embed(title="Error stopping event creation", description="The date format is not correct!", color=0xff0000)
                 await dmchannel.send(embed=embed)
-                await commandmsg.delete()
                 return
 
             startDateTime = dt.strptime(startDateTimeInput, '%Y-%m-%d %H:%M')
             if startDateTime < dt.now():
                 embed=discord.Embed(title="Error stopping event creation", description="You can't create an event in the past!", color=0xff0000)
                 await dmchannel.send(embed=embed)
-                await commandmsg.delete()
                 return
 
 
         # duration
 
         # repeating
+
+        # Image
+        embed=discord.Embed(title="Would you like to add an event image?", description="Type `None` for no image. Please write an URL of an image. Must be a HTTPS url.", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            image = msg.content
+            if image.lower() == "none":
+                image = None
+            else:    
+                if not await valid_image(image):
+                    embed=discord.Embed(title="Error stopping event creation", description="That URL doesn't look like a proper image.", color=0xff0000)
+                    await dmchannel.send(embed=embed)
+                    return
 
         # Build array
         new_event = {
@@ -219,20 +230,22 @@ class Eventboard(commands.Cog):
             "description": description,
             "max_attendees": numAttendees,
             "event_start": startDateTime.timestamp(),
-            "post_id": None
+            "post_id": None,
+            "attending": {},
+            "declined": {},
+            "maybe": {},
+            "image": image
         }
 
         # Save event and output
-        post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, ctx.message.created_at, new_event))
+        post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, new_event))
         new_event["post_id"] = post.id
 
         async with self.config.guild(guild).events() as event_list:
             event_list[post.id] = new_event
 
         await create_event_reactions(guild, post)
-        self.event_cache[guild.id][post.id] = new_event
-
-        await commandmsg.delete()
+        self.event_cache[guild.id][str(post.id)] = new_event
     
     @eventboard.command(name="createdebug")
     #@allowed_to_create()
@@ -243,9 +256,6 @@ class Eventboard(commands.Cog):
         author = ctx.author
         guild = ctx.guild
         commandmsg = ctx.message
-
-        def same_author_check(msg):
-            return msg.author == author
 
         if author.dm_channel is None:
             dmchannel = author.create_dm()
@@ -280,18 +290,22 @@ class Eventboard(commands.Cog):
             "description": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In eu nibh dui. Integer mauris urna, congue quis iaculis vitae, dapibus eu lectus. Proin efficitur, purus nec varius consectetur, urna lorem vestibulum risus, sed eleifend sem risus sed augue. Sed maximus lacinia mi hendrerit interdum. In est neque, condimentum non malesuada eget, sodales nec mi. Sed convallis augue vel lorem ultrices, sed hendrerit justo blandit. Etiam euismod aliquam eros. Aenean ut justo nec tellus venenatis luctus vel ac diam. Duis tempus metus non aliquam molestie. In vitae velit leo.",
             "max_attendees": "100",
             "event_start": (dt.now() + timedelta(hours=24)).timestamp(),
-            "post_id": None
+            "post_id": None,
+            "attending": {},
+            "declined": {},
+            "maybe": {},
+            "image": "https://media.sproutsocial.com/uploads/2017/02/10x-featured-social-media-image-size.png"
         }
 
         # Save event and output
-        post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, ctx.message.created_at, new_event))
+        post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, new_event))
         new_event["post_id"] = post.id
 
         async with self.config.guild(guild).events() as event_list:
             event_list[post.id] = new_event
 
         await create_event_reactions(guild, post)
-        self.event_cache[guild.id][post.id] = new_event
+        self.event_cache[guild.id][str(post.id)] = new_event
 
         await commandmsg.delete()
 
@@ -309,10 +323,15 @@ class Eventboard(commands.Cog):
         """
         event_channel = await self.config.guild(ctx.guild).event_channel()
         chan = ctx.channel
+        if chan.id == event_channel:
+            await self.config.guild(ctx.guild).event_channel.set(None)
+            await ctx.send("This channel is no longer marked as eventchannel!")
+            return
+
         if chan and chan.permissions_for(ctx.me).embed_links:
             await self.config.guild(ctx.guild).event_channel.set(chan.id)
 
-            await ctx.send("This channel is now set to Event channel. You can now create events through here by typing `[p]event create`")
+            await ctx.send("This channel is now set to Event channel. You can now create events through here by typing `[p]eventboard create`")
             await ctx.message.delete()
         else:
             await ctx.send(
@@ -324,18 +343,19 @@ class Eventboard(commands.Cog):
         """
         Checks for reactions to the event
         """
+
         if payload.member.id == self.bot.user.id:
             return
         if payload.guild_id not in self.event_cache:
             return
-        if payload.message_id not in self.event_cache[payload.guild_id]:
+        if str(payload.message_id) not in self.event_cache[payload.guild_id]:
             return
 
         def same_author_check(msg):
             return msg.author == payload.member
                 
         if payload.emoji.name == "🗑️":
-            event = self.event_cache[payload.guild_id][payload.message_id]
+            event = self.event_cache[payload.guild_id][str(payload.message_id)]
             guild = self.bot.get_guild(int(payload.guild_id))
 
             if guild is None:
@@ -381,13 +401,57 @@ class Eventboard(commands.Cog):
                 if deletemsg is None:
                     async with self.config.guild(guild).events() as event_list:
                         del event_list[str(payload.message_id)]
-                        del self.event_cache[guild.id][payload.message_id]
+                        del self.event_cache[guild.id][str(payload.message_id)]
                         await dmchannel.send("And it's gone...")
-            
-        else:
-            log.debug("No matching reaction")
+            return
+        
+        if payload.emoji.name in ("✅","❌","❔"):
+            event = self.event_cache[payload.guild_id][str(payload.message_id)]
+            guild = self.bot.get_guild(int(payload.guild_id))
 
-        return
+            channel = guild.get_channel(int(payload.channel_id))
+            if not channel:
+                return
+
+            message = await channel.fetch_message(payload.message_id)
+            
+            if payload.emoji.name == "✅":
+                async with self.config.guild(guild).events() as events_list:
+                    event = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    num_addending = len(event['attending'])
+                    max_attending = event["max_attendees"]
+                    if int(event["max_attendees"]) <= int(num_addending) and event["max_attendees"] != 0:
+                        await channel.send(f"Sorry {payload.member.mention} this event is full.", delete_after=30)
+                        await message.remove_reaction(payload.emoji, payload.member)
+                        return
+
+                    self.event_cache[payload.guild_id][str(payload.message_id)]["attending"][payload.member.id] = payload.member.id
+                    events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    embed = get_event_embed(guild=guild,event=updated_event)
+                    await message.edit(embed=embed)
+                
+                return
+
+            if payload.emoji.name == "❌":
+                async with self.config.guild(guild).events() as events_list:
+                    self.event_cache[payload.guild_id][str(payload.message_id)]["declined"][payload.member.id] = payload.member.id
+                    events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    embed = get_event_embed(guild=guild,event=updated_event)
+                    await message.edit(embed=embed)
+                
+                return
+
+            if payload.emoji.name == "❔":
+                async with self.config.guild(guild).events() as events_list:
+                    self.event_cache[payload.guild_id][str(payload.message_id)]["maybe"][payload.member.id] = payload.member.id
+                    events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    embed = get_event_embed(guild=guild,event=updated_event)
+                    await message.edit(embed=embed)
+                
+                return
 
 
     @commands.Cog.listener()
@@ -396,7 +460,63 @@ class Eventboard(commands.Cog):
         Checks for reactions to the event
         """
         log.debug("Test Remove")
-        return
+        
+        if payload.user_id == self.bot.user.id:
+            return 
+        if payload.guild_id not in self.event_cache:
+            return
+        if str(payload.message_id) not in self.event_cache[payload.guild_id]:
+            return
+
+        if payload.emoji.name in ("✅","❌","❔"):
+            guild = self.bot.get_guild(int(payload.guild_id))
+            channel = guild.get_channel(int(payload.channel_id))
+            if not channel:
+                return
+
+            message = await channel.fetch_message(payload.message_id)
+            if not message:
+                return
+                
+            if payload.emoji.name == "✅":
+                async with self.config.guild(guild).events() as events_list:
+                    if payload.user_id not in self.event_cache[payload.guild_id][str(payload.message_id)]["attending"]:
+                        updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    else:
+                        del self.event_cache[payload.guild_id][str(payload.message_id)]["attending"][payload.user_id]
+                        events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+                        updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+
+                    embed = get_event_embed(guild=guild,event=updated_event)
+                    await message.edit(embed=embed)
+                    return
+
+            if payload.emoji.name == "❌":
+                async with self.config.guild(guild).events() as events_list:
+                    if payload.user_id not in self.event_cache[payload.guild_id][str(payload.message_id)]["declined"]:
+                        updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    else:
+                        del self.event_cache[payload.guild_id][str(payload.message_id)]["declined"][payload.user_id]
+                        events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+                        updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+
+                    embed = get_event_embed(guild=guild,event=updated_event)
+                    await message.edit(embed=embed)
+                    return
+
+            if payload.emoji.name == "❔":
+                async with self.config.guild(guild).events() as events_list:
+                    if payload.user_id not in self.event_cache[payload.guild_id][str(payload.message_id)]["maybe"]:
+                        updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+                    else:
+                        del self.event_cache[payload.guild_id][str(payload.message_id)]["maybe"][payload.user_id]
+                        events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+                        updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+
+                    embed = get_event_embed(guild=guild,event=updated_event)
+                    await message.edit(embed=embed)
+                    return
+
 
     @commands.Cog.listener()
     async def on_message(self, message):
