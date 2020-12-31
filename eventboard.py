@@ -43,32 +43,40 @@ class Eventboard(commands.Cog):
         self.config.register_guild(**default_guild)
         self.config.register_member(**default_user)
         self.event_cache = {}
-        self.bot.loop.create_task(self.initialize())
+        self.event_init_task = self.bot.loop.create_task(self.initialize())
+
+    def cog_unload(self):
+        self.event_init_task.cancel()
 
     async def initialize(self) -> None:
-        if version_info >= VersionInfo.from_str("3.2.0"):
-            await self.bot.wait_until_red_ready()
-        else:
-            await self.bot.wait_until_ready()
-        try:
-            for guild_id in await self.config.all_guilds():
-                guild = self.bot.get_guild(int(guild_id))
-                if guild_id not in self.event_cache:
-                    self.event_cache[guild_id] = {}
-                if guild is None:
-                    continue
-                data = await self.config.guild(guild).events()
-                for post_id, event_data in data.items():
-                    try:
-                        event = event_data
-                    except (TypeError, KeyError, discord.errors.Forbidden):
-                        log.error("Error loading events", exc_info=True)
+        CHECK_DELAY = 300
+        while self == self.bot.get_cog("Eventboard"):
+            if version_info >= VersionInfo.from_str("3.2.0"):
+                await self.bot.wait_until_red_ready()
+            else:
+                await self.bot.wait_until_ready()
+            try:
+                for guild_id in await self.config.all_guilds():
+                    guild = self.bot.get_guild(int(guild_id))
+                    if guild_id not in self.event_cache:
+                        self.event_cache[guild_id] = {}
+                    if guild is None:
                         continue
-                    if event is None:
-                        return
-                    self.event_cache[guild_id][post_id] = event
-        except Exception as e:
-            log.error("Error loading events", exc_info=e)
+                    data = await self.config.guild(guild).events()
+                    for post_id, event_data in data.items():
+                        try:
+                            event = event_data
+                        except (TypeError, KeyError, discord.errors.Forbidden):
+                            log.error("Error loading events", exc_info=True)
+                            continue
+                        if event is None:
+                            return
+                        self.event_cache[guild_id][post_id] = event
+                log.debug("Events cached")
+            except Exception as e:
+                log.error("Error loading events", exc_info=e)
+
+            await asyncio.sleep(CHECK_DELAY)
 
     def format_help_for_context(self, ctx: commands.Context):
         """
@@ -245,6 +253,8 @@ class Eventboard(commands.Cog):
             event_list[post.id] = new_event
 
         await create_event_reactions(guild, post)
+        if guild.id not in self.event_cache:
+            self.event_cache[guild.id] = {}
         self.event_cache[guild.id][str(post.id)] = new_event
     
     @eventboard.command(name="createdebug")
@@ -258,7 +268,7 @@ class Eventboard(commands.Cog):
         commandmsg = ctx.message
 
         if author.dm_channel is None:
-            dmchannel = author.create_dm()
+            dmchannel = await author.create_dm()
         else:
             dmchannel = author.dm_channel
         
@@ -331,7 +341,7 @@ class Eventboard(commands.Cog):
         if chan and chan.permissions_for(ctx.me).embed_links:
             await self.config.guild(ctx.guild).event_channel.set(chan.id)
 
-            await ctx.send("This channel is now set to Event channel. You can now create events through here by typing `[p]eventboard create`")
+            await ctx.send(f"This channel is now set to Event channel. You can now create events through here by typing `{ctx.clean_prefix}eventboard create`")
             await ctx.message.delete()
         else:
             await ctx.send(
@@ -419,7 +429,6 @@ class Eventboard(commands.Cog):
                 async with self.config.guild(guild).events() as events_list:
                     event = self.event_cache[payload.guild_id][str(payload.message_id)]
                     num_addending = len(event['attending'])
-                    max_attending = event["max_attendees"]
                     if int(event["max_attendees"]) <= int(num_addending) and event["max_attendees"] != 0:
                         await channel.send(f"Sorry {payload.member.mention} this event is full.", delete_after=30)
                         await message.remove_reaction(payload.emoji, payload.member)
