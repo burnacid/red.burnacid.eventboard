@@ -37,16 +37,19 @@ class Eventboard(commands.Cog):
             "events": {},
             "custom_links": {},
             "next_available_id": 1,
-            "auto_end_events": False
+            "auto_end_events": False,
+            "autodelete": 60
         }
         default_user = {"player_class": ""}
         self.config.register_guild(**default_guild)
         self.config.register_member(**default_user)
         self.event_cache = {}
         self.event_init_task = self.bot.loop.create_task(self.initialize())
+        self.event_maintenance = self.bot.loop.create_task(self.maintenance_events())
 
     def cog_unload(self):
         self.event_init_task.cancel()
+        self.event_maintenance.cancel()
 
     async def initialize(self) -> None:
         CHECK_DELAY = 300
@@ -72,7 +75,6 @@ class Eventboard(commands.Cog):
                         if event is None:
                             return
                         self.event_cache[guild_id][post_id] = event
-                log.debug("Events cached")
             except Exception as e:
                 log.error("Error loading events", exc_info=e)
 
@@ -114,7 +116,6 @@ class Eventboard(commands.Cog):
         """
         author = ctx.author
         guild = ctx.guild
-        commandmsg = ctx.message
 
         def same_author_check(msg):
             return msg.author == author
@@ -298,7 +299,7 @@ class Eventboard(commands.Cog):
             "create_time": creation_time,
             "event_name": f"Test event {event_id}",
             "description": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In eu nibh dui. Integer mauris urna, congue quis iaculis vitae, dapibus eu lectus. Proin efficitur, purus nec varius consectetur, urna lorem vestibulum risus, sed eleifend sem risus sed augue. Sed maximus lacinia mi hendrerit interdum. In est neque, condimentum non malesuada eget, sodales nec mi. Sed convallis augue vel lorem ultrices, sed hendrerit justo blandit. Etiam euismod aliquam eros. Aenean ut justo nec tellus venenatis luctus vel ac diam. Duis tempus metus non aliquam molestie. In vitae velit leo.",
-            "max_attendees": "100",
+            "max_attendees": "0",
             "event_start": (dt.now() + timedelta(hours=24)).timestamp(),
             "post_id": None,
             "attending": {},
@@ -347,6 +348,22 @@ class Eventboard(commands.Cog):
             await ctx.send(
                 "I can't set this channel as event channel because I do not have the required permissions"
             )
+    
+    @eventboard_settings.command(name="autodelete")
+    @commands.guild_only()
+    async def set_guild_autodelete(self, ctx: commands.Context, *, minutes: int):
+        """
+        Set how long after start time the events post will be deleted
+
+        `{minutes}` the number of minutes after which the eventpost is removed after the start time. Set to -1 to disable removal of the events
+        """
+
+        await self.config.guild(ctx.guild).autodelete.set(int(minutes))
+        await ctx.message.delete()
+        if minutes < 0:
+            await ctx.channel.send("Auto delete events is disabled", delete_after=60)
+        else:
+            await ctx.channel.send(f"Event messages will now be deleted {minutes} minutes after start time", delete_after=60)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
@@ -429,7 +446,7 @@ class Eventboard(commands.Cog):
                 async with self.config.guild(guild).events() as events_list:
                     event = self.event_cache[payload.guild_id][str(payload.message_id)]
                     num_addending = len(event['attending'])
-                    if int(event["max_attendees"]) <= int(num_addending) and event["max_attendees"] != 0:
+                    if int(event["max_attendees"]) <= int(num_addending) and int(event["max_attendees"]) != 0:
                         await channel.send(f"Sorry {payload.member.mention} this event is full.", delete_after=30)
                         await message.remove_reaction(payload.emoji, payload.member)
                         return
@@ -438,7 +455,7 @@ class Eventboard(commands.Cog):
                     events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
                     updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed)
+                    await message.edit(embed=embed, suppress=False)
                 
                 return
 
@@ -448,7 +465,7 @@ class Eventboard(commands.Cog):
                     events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
                     updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed)
+                    await message.edit(embed=embed, suppress=False)
                 
                 return
 
@@ -458,7 +475,7 @@ class Eventboard(commands.Cog):
                     events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
                     updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed)
+                    await message.edit(embed=embed, suppress=False)
                 
                 return
 
@@ -468,8 +485,7 @@ class Eventboard(commands.Cog):
         """
         Checks for reactions to the event
         """
-        log.debug("Test Remove")
-        
+
         if payload.user_id == self.bot.user.id:
             return 
         if payload.guild_id not in self.event_cache:
@@ -497,7 +513,7 @@ class Eventboard(commands.Cog):
                         updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
 
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed)
+                    await message.edit(embed=embed, suppress=False)
                     return
 
             if payload.emoji.name == "❌":
@@ -510,7 +526,7 @@ class Eventboard(commands.Cog):
                         updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
 
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed)
+                    await message.edit(embed=embed, suppress=False)
                     return
 
             if payload.emoji.name == "❔":
@@ -523,7 +539,7 @@ class Eventboard(commands.Cog):
                         updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
 
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed)
+                    await message.edit(embed=embed, suppress=False)
                     return
 
 
@@ -553,3 +569,63 @@ class Eventboard(commands.Cog):
             await msg.delete(delay=10)
 
         await message.delete(delay=10)
+    
+    async def maintenance_events(self) -> None:
+        CHECK_DELAY = 60
+        while self == self.bot.get_cog("Eventboard"):
+            for guild_id in await self.config.all_guilds():
+                guild = self.bot.get_guild(int(guild_id))
+                if guild_id not in self.event_cache:
+                    continue
+                if guild is None:
+                    continue
+                event_channel = event_channel = await self.config.guild(guild).event_channel()
+                if event_channel is None:
+                    continue
+                channel = guild.get_channel(event_channel)
+                if channel is None:
+                    continue
+
+                data = await self.config.guild(guild).events()
+                for post_id, event_data in data.items():
+                    event = event_data
+                    try:
+                        message = await channel.fetch_message(int(post_id))
+                    except discord.NotFound:
+                        if event["event_start"] < (dt.now()).timestamp():
+                            # Delete historic message
+                            async with self.config.guild(guild).events() as event_list:
+                                del event_list[str(post_id)]
+                                del self.event_cache[guild.id][str(post_id)]
+                        else:
+                            # Recreate message
+                            post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, event))
+                            event["post_id"] = post.id
+
+                            async with self.config.guild(guild).events() as event_list:
+                                event_list[post.id] = event
+                                self.event_cache[guild.id][str(post.id)] = event
+                                del event_list[str(post_id)]
+                                del self.event_cache[guild.id][str(post_id)]
+
+                            await create_event_reactions(guild, post)
+
+                        continue
+                    
+                    autodelete = self.config.guild(guild).autodelete()
+                    if autodelete >= 0:
+                        if event["event_start"] < (dt.now() + timedelta(minutes=autodelete)).timestamp():
+                            # Event has started and can be deleted
+                            deletemsg = await message.delete()
+                            if deletemsg is None:
+                                async with self.config.guild(guild).events() as event_list:
+                                    del event_list[str(post_id)]
+                                    del self.event_cache[guild.id][str(post_id)]
+                            continue
+
+                    if len(message.embeds) == 0:
+                        #Embed is removed. Recreate
+                        embed = get_event_embed(guild=guild,event=event)
+                        await message.edit(embed=embed, suppress=False)
+
+            await asyncio.sleep(CHECK_DELAY)
