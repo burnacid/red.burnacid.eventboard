@@ -58,12 +58,13 @@ def get_event_embed(guild: discord.Guild, event: dict) -> discord.Embed:
         emb.set_image(url=event["image"])
     
     starttime_str = dt.fromtimestamp(event["event_start"]).strftime("%a %d %b %Y at %H:%M")
+    createtime_str = dt.fromtimestamp(event["create_time"]).strftime("%a %d %b %Y at %H:%M")
 
     emb.add_field(name="Time", value=starttime_str, inline=False)
     emb.add_field(name=f":white_check_mark: Accepted{attending_str}", value=attending_members, inline=True)
     emb.add_field(name=":x: Declined", value=declined_members, inline=True)
     emb.add_field(name=":grey_question: Tentative", value=maybe_members, inline=True)
-    emb.set_footer(text=f"Created by {autor_str}")
+    emb.set_footer(text=f"Created by {autor_str}\nCreated on {createtime_str}")
     return emb
 
 async def create_event_reactions(guild: discord.guild, post):

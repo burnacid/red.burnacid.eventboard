@@ -47,6 +47,8 @@ class Eventboard(commands.Cog):
         self.event_init_task = self.bot.loop.create_task(self.initialize())
         self.event_maintenance = self.bot.loop.create_task(self.maintenance_events())
 
+        self.reactionEmoji = {"attending": "✅", "declined": "❌", "maybe": "❔"}
+
     def cog_unload(self):
         self.event_init_task.cancel()
         self.event_maintenance.cancel()
@@ -300,7 +302,7 @@ class Eventboard(commands.Cog):
             "event_name": f"Test event {event_id}",
             "description": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In eu nibh dui. Integer mauris urna, congue quis iaculis vitae, dapibus eu lectus. Proin efficitur, purus nec varius consectetur, urna lorem vestibulum risus, sed eleifend sem risus sed augue. Sed maximus lacinia mi hendrerit interdum. In est neque, condimentum non malesuada eget, sodales nec mi. Sed convallis augue vel lorem ultrices, sed hendrerit justo blandit. Etiam euismod aliquam eros. Aenean ut justo nec tellus venenatis luctus vel ac diam. Duis tempus metus non aliquam molestie. In vitae velit leo.",
             "max_attendees": "0",
-            "event_start": (dt.now() + timedelta(hours=24)).timestamp(),
+            "event_start": (dt.now() + timedelta(minutes=10)).timestamp(),
             "post_id": None,
             "attending": {},
             "declined": {},
@@ -337,12 +339,17 @@ class Eventboard(commands.Cog):
         if chan.id == event_channel:
             await self.config.guild(ctx.guild).event_channel.set(None)
             await ctx.send("This channel is no longer marked as eventchannel!")
+            pins = await chan.pins()
+            for pinned_message in pins:
+                if pinned_message.author.id == self.bot.user.id:
+                    await pinned_message.delete()
             return
 
         if chan and chan.permissions_for(ctx.me).embed_links:
             await self.config.guild(ctx.guild).event_channel.set(chan.id)
 
-            await ctx.send(f"This channel is now set to Event channel. You can now create events through here by typing `{ctx.clean_prefix}eventboard create`")
+            pin = await ctx.send(f"This channel is now set to Event channel. You can now create events through here by typing `{ctx.clean_prefix}eventboard create`")
+            await pin.pin()
             await ctx.message.delete()
         else:
             await ctx.send(
@@ -452,33 +459,29 @@ class Eventboard(commands.Cog):
                         return
 
                     self.event_cache[payload.guild_id][str(payload.message_id)]["attending"][payload.member.id] = payload.member.id
-                    events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
-                    updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
-                    embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed, suppress=False)
-                
-                return
+                    clean = {"declined","maybe"}
 
             if payload.emoji.name == "❌":
                 async with self.config.guild(guild).events() as events_list:
                     self.event_cache[payload.guild_id][str(payload.message_id)]["declined"][payload.member.id] = payload.member.id
-                    events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
-                    updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
-                    embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed, suppress=False)
-                
-                return
+                    clean = {"attending","maybe"}
 
             if payload.emoji.name == "❔":
                 async with self.config.guild(guild).events() as events_list:
                     self.event_cache[payload.guild_id][str(payload.message_id)]["maybe"][payload.member.id] = payload.member.id
-                    events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
-                    updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
-                    embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed, suppress=False)
-                
-                return
+                    clean = {"attending","declined"}
 
+            for reactionClean in clean:
+                async with self.config.guild(guild).events() as events_list:
+                    if payload.user_id in self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean]:
+                        del self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean][payload.user_id]
+                        events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+                        await message.remove_reaction(self.reactionEmoji[reactionClean], payload.member)
+
+            events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]            
+            updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
+            embed = get_event_embed(guild=guild,event=updated_event)
+            await message.edit(embed=embed, suppress=False)
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
@@ -612,8 +615,9 @@ class Eventboard(commands.Cog):
 
                         continue
                     
-                    autodelete = self.config.guild(guild).autodelete()
+                    autodelete = int(await self.config.guild(guild).autodelete())
                     if autodelete >= 0:
+                        autodelete = autodelete * -1
                         if event["event_start"] < (dt.now() + timedelta(minutes=autodelete)).timestamp():
                             # Event has started and can be deleted
                             deletemsg = await message.delete()
