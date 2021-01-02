@@ -38,7 +38,8 @@ class Eventboard(commands.Cog):
             "custom_links": {},
             "next_available_id": 1,
             "auto_end_events": False,
-            "autodelete": 60
+            "autodelete": 60,
+            "reminder": -1
         }
         default_user = {"player_class": ""}
         self.config.register_guild(**default_guild)
@@ -119,13 +120,13 @@ class Eventboard(commands.Cog):
         author = ctx.author
         guild = ctx.guild
 
-        def same_author_check(msg):
-            return msg.author == author
-
         if author.dm_channel is None:
             dmchannel = await author.create_dm()
         else:
             dmchannel = author.dm_channel
+
+        def same_author_check_dm(msg):
+            return msg.author == author and msg.channel == dmchannel
 
         # Check if event channel is set
         event_channel = await self.config.guild(guild).event_channel()
@@ -149,7 +150,7 @@ class Eventboard(commands.Cog):
         embed=discord.Embed(title="Enter the event title", description="Up to 200 characters are permitted", color=0xffff00)
         await dmchannel.send(embed=embed)
         try:
-            msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
             return
@@ -164,7 +165,7 @@ class Eventboard(commands.Cog):
         embed=discord.Embed(title="Enter the event description", description="Type `None` for no description. Up to 1600 characters are permitted", color=0xffff00)
         await dmchannel.send(embed=embed)
         try:
-            msg = await self.bot.wait_for("message", check=same_author_check, timeout=600)
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=600)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
             return
@@ -177,7 +178,7 @@ class Eventboard(commands.Cog):
         embed=discord.Embed(title="Enter the maximum number of attendees", description="Type `0` for unlimited number of attendees.", color=0xffff00)
         await dmchannel.send(embed=embed)
         try:
-            msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
             return
@@ -190,7 +191,7 @@ class Eventboard(commands.Cog):
         embed=discord.Embed(title="When should the event start?", description="Please use `YYYY-MM-DD HH:MM` in 24-hour notation", color=0xffff00)
         await dmchannel.send(embed=embed)
         try:
-            msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
             return
@@ -218,7 +219,7 @@ class Eventboard(commands.Cog):
         embed=discord.Embed(title="Would you like to add an event image?", description="Type `None` for no image. Please write an URL of an image. Must be a HTTPS url.", color=0xffff00)
         await dmchannel.send(embed=embed)
         try:
-            msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
         except asyncio.TimeoutError:
             await dmchannel.send("I'm not sure where you went. We can try this again later.")
             return
@@ -245,7 +246,8 @@ class Eventboard(commands.Cog):
             "attending": {},
             "declined": {},
             "maybe": {},
-            "image": image
+            "image": image,
+            "remindersent": 0
         }
 
         # Save event and output
@@ -307,7 +309,8 @@ class Eventboard(commands.Cog):
             "attending": {},
             "declined": {},
             "maybe": {},
-            "image": "https://media.sproutsocial.com/uploads/2017/02/10x-featured-social-media-image-size.png"
+            "image": "https://media.sproutsocial.com/uploads/2017/02/10x-featured-social-media-image-size.png",
+            "remindersent": 0
         }
 
         # Save event and output
@@ -372,6 +375,22 @@ class Eventboard(commands.Cog):
         else:
             await ctx.channel.send(f"Event messages will now be deleted {minutes} minutes after start time", delete_after=60)
 
+    @eventboard_settings.command(name="reminder")
+    @commands.guild_only()
+    async def set_guild_reminder(self, ctx: commands.Context, *, minutes: int):
+        """
+        Set how long before start time attending members should recieve a reminder
+
+        `{minutes}` the number of minutes before the event starts a reminder is being send to the attending members. Set to -1 to disable reminder messages.
+        """
+
+        await self.config.guild(ctx.guild).reminder.set(int(minutes))
+        await ctx.message.delete(delay=30)
+        if minutes < 0:
+            await ctx.channel.send("Event reminder is disabled", delete_after=30)
+        else:
+            await ctx.channel.send(f"A reminder will be send {minutes} minutes before the event starts", delete_after=30)
+
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         """
@@ -384,9 +403,6 @@ class Eventboard(commands.Cog):
             return
         if str(payload.message_id) not in self.event_cache[payload.guild_id]:
             return
-
-        def same_author_check(msg):
-            return msg.author == payload.member
                 
         if payload.emoji.name == "🗑️":
             event = self.event_cache[payload.guild_id][str(payload.message_id)]
@@ -406,6 +422,9 @@ class Eventboard(commands.Cog):
             else:
                 dmchannel = payload.member.dm_channel
 
+            def same_author_check_dm(msg):
+                return msg.author == payload.member and msg.channel == dmchannel
+
             if payload.member.id != event["creator"] and not await self.is_mod_or_admin(payload.member):            
                 await dmchannel.send("Nice try. But that event isn't yours to delete! :-1:")
                 await message.remove_reaction(payload.emoji, payload.member)
@@ -415,7 +434,7 @@ class Eventboard(commands.Cog):
             embed=discord.Embed(title="You like to delete the selected event?", description="Please type `Y` for yes and `N` for no", color=0x0000FF)
             await dmchannel.send(embed=embed)
             try:
-                msg = await self.bot.wait_for("message", check=same_author_check, timeout=300)
+                msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
             except asyncio.TimeoutError:
                 await dmchannel.send("I'm not sure where you went. We can try this again later.")
                 await message.remove_reaction(payload.emoji, payload.member)
@@ -472,13 +491,13 @@ class Eventboard(commands.Cog):
                     clean = {"attending","declined"}
 
             for reactionClean in clean:
-                async with self.config.guild(guild).events() as events_list:
-                    if payload.user_id in self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean]:
-                        del self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean][payload.user_id]
-                        events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
-                        await message.remove_reaction(self.reactionEmoji[reactionClean], payload.member)
+                if payload.user_id in self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean]:
+                    del self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean][payload.user_id]
+                    await message.remove_reaction(self.reactionEmoji[reactionClean], payload.member)
 
-            events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]            
+            async with self.config.guild(guild).events() as events_list:
+                events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
+
             updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
             embed = get_event_embed(guild=guild,event=updated_event)
             await message.edit(embed=embed, suppress=False)
@@ -576,6 +595,7 @@ class Eventboard(commands.Cog):
     async def maintenance_events(self) -> None:
         CHECK_DELAY = 60
         while self == self.bot.get_cog("Eventboard"):
+            log.debug("MAINTENANCE JOB RUNNING")
             for guild_id in await self.config.all_guilds():
                 guild = self.bot.get_guild(int(guild_id))
                 if guild_id not in self.event_cache:
@@ -626,10 +646,34 @@ class Eventboard(commands.Cog):
                                     del event_list[str(post_id)]
                                     del self.event_cache[guild.id][str(post_id)]
                             continue
-
+                        
                     if len(message.embeds) == 0:
                         #Embed is removed. Recreate
                         embed = get_event_embed(guild=guild,event=event)
                         await message.edit(embed=embed, suppress=False)
 
+                    reminder = int(await self.config.guild(guild).reminder())
+                    if reminder >= 0:
+                        if event["event_start"] < (dt.now() + timedelta(minutes=reminder)).timestamp() and event["remindersent"] == 0:
+                            attending = self.event_cache[guild.id][str(post_id)]['attending']
+                            log.debug(f"Sending reminders {len(attending)}")
+                            for memberid in attending:
+                                member = guild.get_member(memberid)
+                                if member is not None:
+                                    if member.dm_channel is None:
+                                        dmchannel = await member.create_dm()
+                                    else:
+                                        dmchannel = member.dm_channel
+
+                                    temp_event = self.event_cache[guild.id][str(post_id)]
+                                    temp_event["event_name"] = f"REMINDER: {temp_event['event_name']}"
+                                    embed = get_event_embed(guild=guild,event=temp_event)
+                                    await dmchannel.send(embed=embed)
+
+                            async with self.config.guild(guild).events() as event_list:
+                                self.event_cache[guild.id][str(post_id)]["remindersent"] = 1
+                                update_event = self.event_cache[guild.id][str(post_id)]
+                                event_list[str(post_id)] = update_event
+
+            log.debug("MAINTENANCE JOB DONE")
             await asyncio.sleep(CHECK_DELAY)
