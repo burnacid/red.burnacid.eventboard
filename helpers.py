@@ -12,6 +12,13 @@ import logging
 IMAGE_LINKS = re.compile(r"(http[s]?:\/\/[^\"\']*\.(?:png|jpg|jpeg|gif|png))", flags=re.I)
 log = logging.getLogger("red.burnacid.eventboard")
 
+def get_role_mention(guild: discord.Guild, event: dict):
+    role = guild.get_role(int(event["mention"]))
+    if role is None:
+        return None
+    
+    return role.mention
+
 def get_event_embed(guild: discord.Guild, event: dict) -> discord.Embed:
 
     if event["description"] is None:
@@ -84,3 +91,12 @@ async def valid_image(argument):
         return False
     else:
         return True
+
+async def get_mentionable_role(guild: discord.Guild, role_name: str) -> discord.Role:
+    for role in guild.roles:
+        if role.name.lower() == role_name.lower():
+            if role.mentionable == True:
+                return role
+            else:
+                return False
+    return None

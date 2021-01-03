@@ -16,7 +16,9 @@ from redbot.core.utils.predicates import ReactionPredicate
 from .helpers import (
     get_event_embed,
     create_event_reactions,
-    valid_image
+    valid_image,
+    get_mentionable_role,
+    get_role_mention
 )
 
 import asyncio
@@ -39,7 +41,9 @@ class Eventboard(commands.Cog):
             "next_available_id": 1,
             "auto_end_events": False,
             "autodelete": 60,
-            "reminder": -1
+            "reminder": -1,
+            "mentions": {},
+            "mention_all": 1
         }
         default_user = {"player_class": ""}
         self.config.register_guild(**default_guild)
@@ -215,6 +219,51 @@ class Eventboard(commands.Cog):
 
         # repeating
 
+        # Mentions
+        mention_all = await self.config.guild(guild).mention_all()
+        if mention_all == 1:
+            mentions = {}
+            for role in guild.roles:
+                if role.mentionable == True:
+                    mentions[role.id] = role.id
+        else:
+            mentions = await self.config.guild(guild).mentions()
+
+        if len(mentions) != 0:
+            i = 1
+            mention_str = ""
+            mention_dict = {}
+            for mention_id in mentions:
+                role = guild.get_role(int(mention_id))
+                if role is not None:
+                    mention_dict[i] = mention_id
+                    mention_str += f"{i}. {role.name}\n"
+                    i += 1
+
+            embed=discord.Embed(title="Who would you like to mention?", description=f"Type `None` to mention no one. Please type the corrosponding number\n\n {mention_str}", color=0xffff00)
+            await dmchannel.send(embed=embed)
+            try:
+                msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+            except asyncio.TimeoutError:
+                await dmchannel.send("I'm not sure where you went. We can try this again later.")
+                return
+            else:
+                mention_responce = msg.content
+                if mention_responce.lower() == "none":
+                    mention = None
+                else:
+                    if not mention_responce.isnumeric():
+                        embed=discord.Embed(title="Error stopping event creation", description="That doesn't seem like a correct group!", color=0xff0000)
+                        await dmchannel.send(embed=embed)
+                        return
+
+                    if int(mention_responce) > len(mention_dict) and int(mention_responce) > 0:
+                        embed=discord.Embed(title="Error stopping event creation", description="That doesn't seem like a correct group!", color=0xff0000)
+                        await dmchannel.send(embed=embed)
+                        return
+
+                    mention = mention_dict[int(mention_responce)]
+
         # Image
         embed=discord.Embed(title="Would you like to add an event image?", description="Type `None` for no image. Please write an URL of an image. Must be a HTTPS url.", color=0xffff00)
         await dmchannel.send(embed=embed)
@@ -247,11 +296,14 @@ class Eventboard(commands.Cog):
             "declined": {},
             "maybe": {},
             "image": image,
-            "remindersent": 0
+            "remindersent": 0,
+            "mention": mention
         }
 
         # Save event and output
-        post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, new_event))
+        mention = get_role_mention(guild, new_event)
+
+        post = await guild.get_channel(event_channel).send(content=mention, embed=get_event_embed(guild, new_event))
         new_event["post_id"] = post.id
 
         async with self.config.guild(guild).events() as event_list:
@@ -314,7 +366,9 @@ class Eventboard(commands.Cog):
         }
 
         # Save event and output
-        post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, new_event))
+        mention = get_role_mention(guild, new_event)
+
+        post = await guild.get_channel(event_channel).send(content=mention, embed=get_event_embed(guild, new_event))
         new_event["post_id"] = post.id
 
         async with self.config.guild(guild).events() as event_list:
@@ -390,6 +444,105 @@ class Eventboard(commands.Cog):
             await ctx.channel.send("Event reminder is disabled", delete_after=30)
         else:
             await ctx.channel.send(f"A reminder will be send {minutes} minutes before the event starts", delete_after=30)
+
+    @eventboard_settings.group(name="mentions")
+    @commands.guild_only()
+    async def eventboard_settings_mentions(self, ctx: commands.Context) -> None:
+        """
+        Configure mentionable groups
+        """
+        pass
+
+    @eventboard_settings_mentions.command(name="list")
+    @commands.guild_only()
+    async def mention_list(self, ctx: commands.Context) -> None:
+        """
+        List the mentionable roles
+        """
+        
+        roles = await self.config.guild(ctx.guild).mentions()
+        role_list = ""
+        i = 1
+
+        if len(roles) == 0:
+            role_list = "There are no allowed roles in the list yet!"
+        else:
+            role_list = ""
+            for role_id in roles:
+                role = ctx.guild.get_role(int(role_id))
+                if role is not None:
+                    role_list += f"{i}. {role.name}\n"
+                    i += 1
+            
+        emb = discord.Embed(title="List of mentionable roles for events", description=role_list)
+        await ctx.channel.send(embed=emb)
+
+    @eventboard_settings_mentions.command(name="add")
+    @commands.guild_only()
+    async def mention_add(self, ctx: commands.Context, *, role_str: str) -> None:
+        """
+        Add a role to the allowed mentions list
+        """
+
+        await ctx.message.delete(delay=30)
+        role = await get_mentionable_role(ctx.guild, role_str)
+        if role is None:
+            await ctx.channel.send(f"`{role_str}` can't be found", delete_after=30)
+            return
+
+        if role is False:
+            await ctx.channel.send(f"`{role_str}` is not a mentionable role", delete_after=30)
+            return
+
+        async with self.config.guild(ctx.guild).mentions() as mentions_list:
+            if role.id in mentions_list:
+                await ctx.channel.send(f"`{role.name}` is already in the list", delete_after=30)
+                return
+            else:
+                await ctx.channel.send(f"`{role.name}` was added to mentionable roles for events", delete_after=30)
+                mentions_list[role.id] = role.id
+
+    @eventboard_settings_mentions.command(name="delete")
+    @commands.guild_only()
+    async def mention_delete(self, ctx: commands.Context, *, role_str: str) -> None:
+        """
+        Delete a role to the allowed mentions list
+        """
+        
+        await ctx.message.delete(delay=30)
+        role = await get_mentionable_role(ctx.guild, role_str)
+        if role is None:
+            await ctx.channel.send(f"`{role_str}` can't be found", delete_after=30)
+            return
+
+        if role is False:
+            await ctx.channel.send(f"`{role_str}` is not a mentionable role", delete_after=30)
+            return
+
+        async with self.config.guild(ctx.guild).mentions() as mentions_list:
+            if str(role.id) not in mentions_list:
+                await ctx.channel.send(f"`{role.name}` is not in the list", delete_after=30)
+                return
+            else:
+                await ctx.channel.send(f"`{role.name}` was deleted to mentionable roles for events", delete_after=30)
+                del mentions_list[str(role.id)]
+
+    @eventboard_settings_mentions.command(name="all")
+    @commands.guild_only()
+    async def mention_all(self, ctx: commands.Context):
+        """
+        Toggle mentioning all mentionable groups automaticly
+        """
+        
+        mention_all = await self.config.guild(ctx.guild).mention_all(0)
+        await ctx.message.delete(delay=30)
+
+        if mention_all == 0:
+            await self.config.guild(ctx.guild).mention_all.set(1)
+            await ctx.channel.send("Mention all is now **Enabled**", delete_after=30)
+        else:
+            await self.config.guild(ctx.guild).mention_all.set(0)
+            await ctx.channel.send("Mention all is now **Disabled**", delete_after=30)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
@@ -500,7 +653,9 @@ class Eventboard(commands.Cog):
 
             updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
             embed = get_event_embed(guild=guild,event=updated_event)
-            await message.edit(embed=embed, suppress=False)
+
+            mention = get_role_mention(guild, updated_event)
+            await message.edit(content=mention, embed=embed, suppress=False)
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
@@ -533,9 +688,10 @@ class Eventboard(commands.Cog):
                         del self.event_cache[payload.guild_id][str(payload.message_id)]["attending"][payload.user_id]
                         events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
                         updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
-
+                    
+                    mention = get_role_mention(guild, updated_event)
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed, suppress=False)
+                    await message.edit(content=mention, embed=embed, suppress=False)
                     return
 
             if payload.emoji.name == "❌":
@@ -547,8 +703,9 @@ class Eventboard(commands.Cog):
                         events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
                         updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
 
+                    mention = get_role_mention(guild, updated_event)
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed, suppress=False)
+                    await message.edit(content=mention, embed=embed, suppress=False)
                     return
 
             if payload.emoji.name == "❔":
@@ -560,8 +717,9 @@ class Eventboard(commands.Cog):
                         events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
                         updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
 
+                    mention = get_role_mention(guild, updated_event)
                     embed = get_event_embed(guild=guild,event=updated_event)
-                    await message.edit(embed=embed, suppress=False)
+                    await message.edit(content=mention, embed=embed, suppress=False)
                     return
 
 
@@ -595,7 +753,6 @@ class Eventboard(commands.Cog):
     async def maintenance_events(self) -> None:
         CHECK_DELAY = 60
         while self == self.bot.get_cog("Eventboard"):
-            log.debug("MAINTENANCE JOB RUNNING")
             for guild_id in await self.config.all_guilds():
                 guild = self.bot.get_guild(int(guild_id))
                 if guild_id not in self.event_cache:
@@ -622,7 +779,8 @@ class Eventboard(commands.Cog):
                                 del self.event_cache[guild.id][str(post_id)]
                         else:
                             # Recreate message
-                            post = await guild.get_channel(event_channel).send(embed=get_event_embed(guild, event))
+                            mention = get_role_mention(guild, event)
+                            post = await guild.get_channel(event_channel).send(content=mention, embed=get_event_embed(guild, event))
                             event["post_id"] = post.id
 
                             async with self.config.guild(guild).events() as event_list:
@@ -649,14 +807,14 @@ class Eventboard(commands.Cog):
                         
                     if len(message.embeds) == 0:
                         #Embed is removed. Recreate
+                        mention = get_role_mention(guild, event)
                         embed = get_event_embed(guild=guild,event=event)
-                        await message.edit(embed=embed, suppress=False)
+                        await message.edit(content=mention, embed=embed, suppress=False)
 
                     reminder = int(await self.config.guild(guild).reminder())
                     if reminder >= 0:
                         if event["event_start"] < (dt.now() + timedelta(minutes=reminder)).timestamp() and event["remindersent"] == 0:
                             attending = self.event_cache[guild.id][str(post_id)]['attending']
-                            log.debug(f"Sending reminders {len(attending)}")
                             for memberid in attending:
                                 member = guild.get_member(memberid)
                                 if member is not None:
@@ -667,13 +825,14 @@ class Eventboard(commands.Cog):
 
                                     temp_event = self.event_cache[guild.id][str(post_id)]
                                     temp_event["event_name"] = f"REMINDER: {temp_event['event_name']}"
+
+                                    mention = get_role_mention(guild, temp_event)
                                     embed = get_event_embed(guild=guild,event=temp_event)
-                                    await dmchannel.send(embed=embed)
+                                    await dmchannel.send(content=mention, embed=embed)
 
                             async with self.config.guild(guild).events() as event_list:
                                 self.event_cache[guild.id][str(post_id)]["remindersent"] = 1
                                 update_event = self.event_cache[guild.id][str(post_id)]
                                 event_list[str(post_id)] = update_event
 
-            log.debug("MAINTENANCE JOB DONE")
             await asyncio.sleep(CHECK_DELAY)
