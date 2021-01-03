@@ -1,5 +1,6 @@
 import logging
 from typing import Literal, Optional, Union
+import copy
 
 import re
 
@@ -111,6 +112,98 @@ class Eventboard(commands.Cog):
     async def eventboard(self, ctx: commands.Context):
         """Base command for events"""
         pass
+
+    @eventboard.group(name="manage")
+    @commands.guild_only()
+    async def eventboard_manage(self, ctx: commands.Context):
+        """Manage your events"""
+        pass
+
+    @eventboard_manage.command("addattending")
+    @commands.guild_only()
+    async def eventboard_addattending(self, ctx: commands.Context):
+        """Manually add an attending member"""
+        author = ctx.author
+        guild = ctx.guild
+
+        if author.dm_channel is None:
+            dmchannel = await author.create_dm()
+        else:
+            dmchannel = author.dm_channel
+
+        def same_author_check_dm(msg):
+            return msg.author == author and msg.channel == dmchannel
+
+        await ctx.message.delete(delay=10)
+
+        manageble_events = await self.get_manageble_events(guild, author)
+        if len(manageble_events) == 0:
+            await ctx.send("You can't manage any events", delete_after=15)
+            return
+
+        event_str = ""
+        for event in manageble_events:
+            event_str += f"{event}. {manageble_events[event]['event_name']}\n"
+
+        embed=discord.Embed(title="Select the event your like to add a attendant to", description=f"Enter the number of the list. Type `None` to cancel.\n\n{event_str}", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            event_number = msg.content
+            if event_number.lower() == "none":
+                return
+
+            if event_number.isnumeric() == False:
+                embed=discord.Embed(title="Error", description="That is not a number", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+
+            if int(event_number) < 1 or int(event_number) > len(manageble_events):
+                embed=discord.Embed(title="Error", description="I can't find that event", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+            
+            selected_event = manageble_events[int(event_number)]
+
+        embed=discord.Embed(title="Who would you like to add", description=f"Please enter the nickname or discord name of the member you would like to add.", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            member_name = msg.content
+            member = guild.get_member_named(member_name)
+
+            if member is None:
+                embed=discord.Embed(title="Error", description="I can't find anyone with that name", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+
+            async with self.config.guild(guild).events() as events_list:
+                event = self.event_cache[guild.id][str(selected_event["post_id"])]
+                num_addending = len(event['attending'])
+                if int(event["max_attendees"]) <= int(num_addending) and int(event["max_attendees"]) != 0:
+                    await dmchannel.send(f"Sorry, this event is full.", delete_after=30)
+                    return
+                
+                await dmchannel.send(f"Adding {member.mention}")
+                self.event_cache[guild.id][str(selected_event["post_id"])]["attending"][member.id] = member.id
+                updated_event = self.event_cache[guild.id][str(selected_event["post_id"])]
+                events_list[str(selected_event["post_id"])] = updated_event
+            
+            message = await self.get_event_post(guild, updated_event["post_id"])
+            if message is None:
+                return
+
+            embed = get_event_embed(guild=guild,event=updated_event)
+            mention = get_role_mention(guild, updated_event)
+            await message.edit(content=mention, embed=embed, suppress=False)
 
     @eventboard.command(name="create")
     #@allowed_to_create()
@@ -362,7 +455,8 @@ class Eventboard(commands.Cog):
             "declined": {},
             "maybe": {},
             "image": "https://media.sproutsocial.com/uploads/2017/02/10x-featured-social-media-image-size.png",
-            "remindersent": 0
+            "remindersent": 0,
+            "mention": None
         }
 
         # Save event and output
@@ -823,7 +917,7 @@ class Eventboard(commands.Cog):
                                     else:
                                         dmchannel = member.dm_channel
 
-                                    temp_event = self.event_cache[guild.id][str(post_id)]
+                                    temp_event = copy.copy(self.event_cache[guild.id][str(post_id)])
                                     temp_event["event_name"] = f"REMINDER: {temp_event['event_name']}"
 
                                     mention = get_role_mention(guild, temp_event)
@@ -836,3 +930,35 @@ class Eventboard(commands.Cog):
                                 event_list[str(post_id)] = update_event
 
             await asyncio.sleep(CHECK_DELAY)
+
+    async def get_manageble_events(self, guild: discord.Guild, member: discord.Member):
+        event_posts = self.event_cache[guild.id]
+        responce = {}
+        i = 1
+        for event_post in event_posts:
+            event = self.event_cache[guild.id][event_post]
+            if await self.is_mod_or_admin(member) == True:
+                responce[i] = event
+                i += 1
+            elif event['creator'] == member.id:
+                responce[i] = event
+                i += 1
+        return responce
+    
+    async def get_guild_event_channel(self, guild: discord.Guild) -> discord.TextChannel:
+        if guild is None:
+            return None
+        
+        event_channel_id = await self.config.guild(guild).event_channel() 
+        channel = guild.get_channel(event_channel_id)
+
+        return channel
+
+    async def get_event_post(self, guild: discord.Guild, post_id: int, channel: discord.TextChannel=None) -> discord.Message:
+        if channel is None:
+            channel = await self.get_guild_event_channel(guild)
+            if channel is None:
+                return None
+        
+        post = await channel.fetch_message(post_id)
+        return post
