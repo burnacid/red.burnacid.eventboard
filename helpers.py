@@ -13,6 +13,9 @@ IMAGE_LINKS = re.compile(r"(http[s]?:\/\/[^\"\']*\.(?:png|jpg|jpeg|gif|png))", f
 log = logging.getLogger("red.burnacid.eventboard")
 
 def get_role_mention(guild: discord.Guild, event: dict):
+    if event["mention"] is None:
+        return None
+
     role = guild.get_role(int(event["mention"]))
     if role is None:
         return None
