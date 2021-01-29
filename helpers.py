@@ -45,7 +45,11 @@ def get_event_embed(guild: discord.Guild, event: dict) -> discord.Embed:
     else:
         attending_members = ""
         for memberid in event["attending"]:
-            member_str = guild.get_member(int(memberid)).mention
+            member = guild.get_member(int(memberid))
+            if member is None:
+                member_str = "Unknown"
+            else:
+                member_str = guild.get_member(int(memberid)).mention
             attending_members += f"{member_str}\n"
 
     if len(event["declined"]) == 0:
@@ -53,7 +57,11 @@ def get_event_embed(guild: discord.Guild, event: dict) -> discord.Embed:
     else:
         declined_members = ""
         for memberid in event["declined"]:
-            member_str = guild.get_member(int(memberid)).mention
+            member = guild.get_member(int(memberid))
+            if member is None:
+                member_str = "Unknown"
+            else:
+                member_str = guild.get_member(int(memberid)).mention
             declined_members += f"{member_str}\n"
 
     if len(event["maybe"]) == 0:
@@ -61,7 +69,11 @@ def get_event_embed(guild: discord.Guild, event: dict) -> discord.Embed:
     else:
         maybe_members = ""
         for memberid in event["maybe"]:
-            member_str = guild.get_member(int(memberid)).mention
+            member = guild.get_member(int(memberid))
+            if member is None:
+                member_str = "Unknown"
+            else:
+                member_str = guild.get_member(int(memberid)).mention
             maybe_members += f"{member_str}\n"
 
     if event["image"] is not None:
