@@ -62,7 +62,7 @@ class Eventboard(commands.Cog):
     async def initialize(self) -> None:
         CHECK_DELAY = 300
         while self == self.bot.get_cog("Eventboard"):
-            log.info("Running Event Init")
+            log.debug("Running Event Init")
             if version_info >= VersionInfo.from_str("3.2.0"):
                 await self.bot.wait_until_red_ready()
             else:
@@ -87,6 +87,7 @@ class Eventboard(commands.Cog):
             except Exception as e:
                 log.error("Error loading events", exc_info=e)
 
+            log.debug("Ended Event Init")
             await asyncio.sleep(CHECK_DELAY)
 
     def format_help_for_context(self, ctx: commands.Context):
@@ -934,90 +935,132 @@ class Eventboard(commands.Cog):
     async def maintenance_events(self) -> None:
         CHECK_DELAY = 60
         while self == self.bot.get_cog("Eventboard"):
-            log.info("Maintenance Task Started")
-            for guild_id in await self.config.all_guilds():
-                guild = self.bot.get_guild(int(guild_id))
-                if guild_id not in self.event_cache:
-                    continue
-                if guild is None:
-                    continue
-                event_channel = event_channel = await self.config.guild(guild).event_channel()
-                if event_channel is None:
-                    continue
-                channel = guild.get_channel(event_channel)
-                if channel is None:
-                    continue
-
-                data = await self.config.guild(guild).events()
-                for post_id, event_data in data.items():
-                    event = event_data
-                    try:
-                        message = await channel.fetch_message(int(post_id))
-                    except discord.NotFound:
-                        if event["event_start"] < (dt.now()).timestamp():
-                            # Delete historic message
-                            async with self.config.guild(guild).events() as event_list:
-                                del event_list[str(post_id)]
-                                del self.event_cache[guild.id][str(post_id)]
-                        else:
-                            # Recreate message
-                            mention = get_role_mention(guild, event)
-                            post = await guild.get_channel(event_channel).send(content=mention, embed=get_event_embed(guild, event))
-                            event["post_id"] = post.id
-
-                            async with self.config.guild(guild).events() as event_list:
-                                event_list[post.id] = event
-                                self.event_cache[guild.id][str(post.id)] = event
-                                del event_list[str(post_id)]
-                                del self.event_cache[guild.id][str(post_id)]
-
-                            await create_event_reactions(guild, post)
-
+            log.debug("Maintenance Task Started")
+            try:
+                for guild_id in await self.config.all_guilds():
+                    guild = self.bot.get_guild(int(guild_id))
+                    if guild_id not in self.event_cache:
                         continue
-                    
-                    autodelete = int(await self.config.guild(guild).autodelete())
-                    if autodelete >= 0:
-                        autodelete = autodelete * -1
-                        if event["event_start"] < (dt.now() + timedelta(minutes=autodelete)).timestamp():
-                            # Event has started and can be deleted
-                            deletemsg = await message.delete()
-                            if deletemsg is None:
+                    if guild is None:
+                        continue
+                    event_channel = event_channel = await self.config.guild(guild).event_channel()
+                    if event_channel is None:
+                        continue
+                    channel = guild.get_channel(event_channel)
+                    if channel is None:
+                        continue
+
+                    data = await self.config.guild(guild).events()
+                    for post_id, event_data in data.items():
+                        event = event_data
+                        try:
+                            message = await channel.fetch_message(int(post_id))
+                        except discord.NotFound:
+                            if event["event_start"] < (dt.now()).timestamp():
+                                # Delete historic message
                                 async with self.config.guild(guild).events() as event_list:
                                     del event_list[str(post_id)]
                                     del self.event_cache[guild.id][str(post_id)]
+                            else:
+                                # Recreate message
+                                mention = get_role_mention(guild, event)
+                                post = await guild.get_channel(event_channel).send(content=mention, embed=get_event_embed(guild, event))
+                                event["post_id"] = post.id
+
+                                async with self.config.guild(guild).events() as event_list:
+                                    event_list[post.id] = event
+                                    self.event_cache[guild.id][str(post.id)] = event
+                                    del event_list[str(post_id)]
+                                    del self.event_cache[guild.id][str(post_id)]
+
+                                await create_event_reactions(guild, post)
+
                             continue
                         
-                    if len(message.embeds) == 0:
-                        #Embed is removed. Recreate
-                        mention = get_role_mention(guild, event)
-                        embed = get_event_embed(guild=guild,event=event)
-                        await message.edit(content=mention, embed=embed, suppress=False)
+                        autodelete = int(await self.config.guild(guild).autodelete())
+                        if autodelete >= 0:
+                            autodelete = autodelete * -1
+                            if event["event_start"] < (dt.now() + timedelta(minutes=autodelete)).timestamp():
+                                # Event has started and can be deleted
+                                deletemsg = await message.delete()
+                                if deletemsg is None:
+                                    async with self.config.guild(guild).events() as event_list:
+                                        del event_list[str(post_id)]
+                                        del self.event_cache[guild.id][str(post_id)]
+                                continue
+                            
+                        if len(message.embeds) == 0:
+                            #Embed is removed. Recreate
+                            mention = get_role_mention(guild, event)
+                            embed = get_event_embed(guild=guild,event=event)
+                            await message.edit(content=mention, embed=embed, suppress=False)
 
-                    reminder = int(await self.config.guild(guild).reminder())
-                    if reminder >= 0:
-                        if event["event_start"] < (dt.now() + timedelta(minutes=reminder)).timestamp() and event["remindersent"] == 0:
-                            attending = self.event_cache[guild.id][str(post_id)]['attending']
-                            for memberid in attending:
-                                member = guild.get_member(int(memberid))
-                                if member is not None:
-                                    if member.dm_channel is None:
-                                        dmchannel = await member.create_dm()
-                                    else:
-                                        dmchannel = member.dm_channel
+                        reminder = int(await self.config.guild(guild).reminder())
+                        if reminder >= 0:
+                            if event["event_start"] < (dt.now() + timedelta(minutes=reminder)).timestamp() and int(event["remindersent"]) == 0:
+                                log.debug("Sending Reminders")
+                                attending = self.event_cache[guild.id][str(post_id)]['attending']
+                                for memberid in attending:
+                                    member = guild.get_member(int(memberid))
+                                    if member is not None:
+                                        if member.dm_channel is None:
+                                            dmchannel = await member.create_dm()
+                                        else:
+                                            dmchannel = member.dm_channel
 
-                                    temp_event = copy.copy(self.event_cache[guild.id][str(post_id)])
-                                    temp_event["event_name"] = f"REMINDER: {temp_event['event_name']}"
+                                        temp_event = copy.copy(self.event_cache[guild.id][str(post_id)])
+                                        temp_event["event_name"] = f"REMINDER: {temp_event['event_name']}"
 
-                                    mention = get_role_mention(guild, temp_event)
-                                    embed = get_event_embed(guild=guild,event=temp_event)
-                                    await dmchannel.send(content=mention, embed=embed)
+                                        mention = get_role_mention(guild, temp_event)
+                                        embed = get_event_embed(guild=guild,event=temp_event)
+                                        await dmchannel.send(content=mention, embed=embed)
 
-                            async with self.config.guild(guild).events() as event_list:
-                                self.event_cache[guild.id][str(post_id)]["remindersent"] = 1
-                                update_event = self.event_cache[guild.id][str(post_id)]
-                                event_list[str(post_id)] = update_event
+                                async with self.config.guild(guild).events() as event_list:
+                                    self.event_cache[guild.id][str(post_id)]["remindersent"] = 1
+                                    update_event = self.event_cache[guild.id][str(post_id)]
+                                    event_list[str(post_id)] = update_event
 
-            log.info("Maintenance Task Stopped")
+                        # Clean up unknowns
+                        clean = 0
+                        for memberid in event["attending"]:
+                            member = guild.get_member(int(memberid))
+                            if member is None:
+                                clean = 1
+                                async with self.config.guild(guild).events() as events_list:
+                                    del self.event_cache[guild.id][str(post_id)]["attending"][str(memberid)]
+                                    events_list[str(post_id)] = self.event_cache[guild.id][str(post_id)]
+                                    updated_event = self.event_cache[guild.id][str(post_id)]
+
+
+                        for memberid in event["declined"]:
+                            member = guild.get_member(int(memberid))
+                            if member is None:
+                                clean = 1
+                                async with self.config.guild(guild).events() as events_list:
+                                    del self.event_cache[guild.id][str(post_id)]["declined"][str(memberid)]
+                                    events_list[str(post_id)] = self.event_cache[guild.id][str(post_id)]
+                                    updated_event = self.event_cache[guild.id][str(post_id)]
+
+
+                        for memberid in event["maybe"]:
+                            member = guild.get_member(int(memberid))
+                            if member is None:
+                                clean = 1
+                                async with self.config.guild(guild).events() as events_list:
+                                    del self.event_cache[guild.id][str(post_id)]["maybe"][str(memberid)]
+                                    events_list[str(post_id)] = self.event_cache[guild.id][str(post_id)]
+                                    updated_event = self.event_cache[guild.id][str(post_id)]
+
+                        if clean == 1:
+                            embed = get_event_embed(guild=guild,event=updated_event)
+                            mention = get_role_mention(guild, updated_event)
+                            await message.edit(content=mention, embed=embed, suppress=False)
+                        
+
+            except Exception as e:
+                log.error("Error loading events", exc_info=e)
+
+            log.debug("Maintenance Task Stopped")
             await asyncio.sleep(CHECK_DELAY)
 
     async def get_manageble_events(self, guild: discord.Guild, member: discord.Member):
