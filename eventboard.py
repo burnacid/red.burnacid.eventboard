@@ -45,7 +45,7 @@ class Eventboard(commands.Cog):
             "reminder": -1,
             "mentions": {},
             "mention_all": 1,
-            "notifications_signup": {},
+            "notifications_signin": {},
             "notifications_signout": {},
             "notifications_eventstart": {}
         }
@@ -309,6 +309,7 @@ class Eventboard(commands.Cog):
         author = ctx.author
         await ctx.message.delete(delay=5)
 
+        
         eventstart = await self.config.guild(ctx.guild).notifications_eventstart()
         if str(author.id) in eventstart:
             current = eventstart[str(author.id)]
@@ -326,17 +327,17 @@ class Eventboard(commands.Cog):
         else:
             await ctx.channel.send("You will receive a notification before an event starts", delete_after=15)
 
-    @eventboard_notifications.command("signup")
+    @eventboard_notifications.command("signin")
     @commands.guild_only()
     async def eventboard_notifications_(self, ctx: commands.Context):
-        """Toggle notification if a member signed up to your event"""
+        """Toggle notification if a member signed in to your event"""
 
         author = ctx.author
         await ctx.message.delete(delay=5)
 
-        signup = await self.config.guild(ctx.guild).notifications_signup()
-        if str(author.id) in signup:
-            current = signup[str(author.id)]
+        signin = await self.config.guild(ctx.guild).notifications_signin()
+        if str(author.id) in signin:
+            current = signin[str(author.id)]
             if current == 1:
                 new_value = 0
             else:
@@ -344,12 +345,12 @@ class Eventboard(commands.Cog):
         else:
             new_value = 0
         
-        signup[str(author.id)] = new_value
-        await self.config.guild(ctx.guild).notifications_signup.set(signup)
+        signin[str(author.id)] = new_value
+        await self.config.guild(ctx.guild).notifications_signin.set(signin)
         if new_value == 0:
-            await ctx.channel.send("You will no longer receive a notification when someone signs up for your event", delete_after=15)
+            await ctx.channel.send("You will no longer receive a notification when someone signs in for your event", delete_after=15)
         else:
-            await ctx.channel.send("You will receive a notification when someone signs up for your event", delete_after=15)
+            await ctx.channel.send("You will receive a notification when someone signs in for your event", delete_after=15)
 
     @eventboard_notifications.command("signout")
     @commands.guild_only()
@@ -1214,6 +1215,8 @@ class Eventboard(commands.Cog):
                     self.event_cache[payload.guild_id][str(payload.message_id)]["attending"][str(payload.member.id)] = str(payload.member.id)
                     clean = {"declined","maybe"}
 
+                    await self.send_join_notification(guild=guild, member=payload.member, event=event, typeOfNotification="signin")
+
             if payload.emoji.name == "❌":
                 async with self.config.guild(guild).events() as events_list:
                     self.event_cache[payload.guild_id][str(payload.message_id)]["declined"][str(payload.member.id)] = str(payload.member.id)
@@ -1225,6 +1228,7 @@ class Eventboard(commands.Cog):
                     clean = {"attending","declined"}
 
             for reactionClean in clean:
+                
                 if str(payload.user_id) in self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean]:
                     del self.event_cache[payload.guild_id][str(payload.message_id)][reactionClean][str(payload.user_id)]
                     await message.remove_reaction(self.reactionEmoji[reactionClean], payload.member)
@@ -1254,6 +1258,7 @@ class Eventboard(commands.Cog):
         if payload.emoji.name in ("✅","❌","❔"):
             guild = self.bot.get_guild(int(payload.guild_id))
             channel = guild.get_channel(int(payload.channel_id))
+            member = guild.get_member(int(payload.user_id))
             if not channel:
                 return
 
@@ -1270,6 +1275,9 @@ class Eventboard(commands.Cog):
                         events_list[str(payload.message_id)] = self.event_cache[payload.guild_id][str(payload.message_id)]
                         updated_event = self.event_cache[payload.guild_id][str(payload.message_id)]
                     
+                    #send signout notification
+                    await self.send_join_notification(guild=guild, member=member, event=updated_event, typeOfNotification="signout")
+
                     mention = get_role_mention(guild, updated_event)
                     embed = get_event_embed(guild=guild,event=updated_event)
                     await message.edit(content=mention, embed=embed, suppress=False)
@@ -1400,19 +1408,23 @@ class Eventboard(commands.Cog):
                                 log.debug("Sending Reminders")
                                 attending = self.event_cache[guild.id][str(post_id)]['attending']
                                 for memberid in attending:
-                                    member = guild.get_member(int(memberid))
+                                    member = guild.get_member(int(memberid))                                       
+
                                     if member is not None:
-                                        if member.dm_channel is None:
-                                            dmchannel = await member.create_dm()
-                                        else:
-                                            dmchannel = member.dm_channel
+                                        # check if member wants notification
+                                        if await self.get_wants_notification(guild=guild, member=member, typeOfNotification="eventstart") == 1:
 
-                                        temp_event = copy.copy(self.event_cache[guild.id][str(post_id)])
-                                        temp_event["event_name"] = f"REMINDER: {temp_event['event_name']}"
+                                            if member.dm_channel is None:
+                                                dmchannel = await member.create_dm()
+                                            else:
+                                                dmchannel = member.dm_channel
 
-                                        mention = get_role_mention(guild, temp_event)
-                                        embed = get_event_embed(guild=guild,event=temp_event)
-                                        await dmchannel.send(content=mention, embed=embed)
+                                            temp_event = copy.copy(self.event_cache[guild.id][str(post_id)])
+                                            temp_event["event_name"] = f"REMINDER: {temp_event['event_name']}"
+
+                                            mention = get_role_mention(guild, temp_event)
+                                            embed = get_event_embed(guild=guild,event=temp_event)
+                                            await dmchannel.send(content=mention, embed=embed)
 
                                 async with self.config.guild(guild).events() as event_list:
                                     self.event_cache[guild.id][str(post_id)]["remindersent"] = 1
@@ -1493,3 +1505,32 @@ class Eventboard(commands.Cog):
         
         post = await channel.fetch_message(post_id)
         return post
+
+    async def get_wants_notification(self, guild: discord.Guild, member: discord.Member, typeOfNotification: str):
+
+        if typeOfNotification == "eventstart":
+            notifications = await self.config.guild(guild).notifications_eventstart()
+        elif  typeOfNotification == "signout":
+            notifications = await self.config.guild(guild).notifications_signout()
+        elif  typeOfNotification == "signin":
+            notifications = await self.config.guild(guild).notifications_signin()
+
+        if str(member.id) in notifications:
+            return notifications[str(member.id)]
+
+        return 1
+    
+    async def send_join_notification(self, guild: discord.Guild, member: discord.Member, event, typeOfNotification: str):
+        
+        eventposter = guild.get_member(int(event['creator']))
+        if eventposter is not None:
+            if await self.get_wants_notification(guild=guild, member=eventposter, typeOfNotification=typeOfNotification) == 1:
+                if eventposter.dm_channel is None:
+                    dmchannel = await eventposter.create_dm()
+                else:
+                    dmchannel = eventposter.dm_channel
+
+                if typeOfNotification == "signin":
+                    await dmchannel.send(f"{member.mention} has signed up from {event['event_name']}")
+                elif typeOfNotification == "signout":
+                    await dmchannel.send(f"{member.mention} has signed out from {event['event_name']}")
