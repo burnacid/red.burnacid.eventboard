@@ -44,7 +44,10 @@ class Eventboard(commands.Cog):
             "autodelete": 60,
             "reminder": -1,
             "mentions": {},
-            "mention_all": 1
+            "mention_all": 1,
+            "notifications_signup": {},
+            "notifications_signout": {},
+            "notifications_eventstart": {}
         }
         default_user = {"player_class": ""}
         self.config.register_guild(**default_guild)
@@ -291,6 +294,87 @@ class Eventboard(commands.Cog):
             embed = get_event_embed(guild=guild,event=updated_event)
             mention = get_role_mention(guild, updated_event)
             await message.edit(content=mention, embed=embed, suppress=False)
+
+    @eventboard.group(name="notifications")
+    @commands.guild_only()
+    async def eventboard_notifications(self, ctx: commands.Context):
+        """Edit your notifications"""
+        pass
+
+    @eventboard_notifications.command("eventstart")
+    @commands.guild_only()
+    async def eventboard_notifications_eventstart(self, ctx: commands.Context):
+        """Toggle notification before an event starts"""
+
+        author = ctx.author
+        await ctx.message.delete(delay=5)
+
+        eventstart = await self.config.guild(ctx.guild).notifications_eventstart()
+        if str(author.id) in eventstart:
+            current = eventstart[str(author.id)]
+            if current == 1:
+                new_value = 0
+            else:
+                new_value = 1
+        else:
+            new_value = 0
+        
+        eventstart[str(author.id)] = new_value
+        await self.config.guild(ctx.guild).notifications_eventstart.set(eventstart)
+        if new_value == 0:
+            await ctx.channel.send("You will no longer receive a notification before an event starts", delete_after=15)
+        else:
+            await ctx.channel.send("You will receive a notification before an event starts", delete_after=15)
+
+    @eventboard_notifications.command("signup")
+    @commands.guild_only()
+    async def eventboard_notifications_(self, ctx: commands.Context):
+        """Toggle notification if a member signed up to your event"""
+
+        author = ctx.author
+        await ctx.message.delete(delay=5)
+
+        signup = await self.config.guild(ctx.guild).notifications_signup()
+        if str(author.id) in signup:
+            current = signup[str(author.id)]
+            if current == 1:
+                new_value = 0
+            else:
+                new_value = 1
+        else:
+            new_value = 0
+        
+        signup[str(author.id)] = new_value
+        await self.config.guild(ctx.guild).notifications_signup.set(signup)
+        if new_value == 0:
+            await ctx.channel.send("You will no longer receive a notification when someone signs up for your event", delete_after=15)
+        else:
+            await ctx.channel.send("You will receive a notification when someone signs up for your event", delete_after=15)
+
+    @eventboard_notifications.command("signout")
+    @commands.guild_only()
+    async def eventboard_notifications_signout(self, ctx: commands.Context):
+        """Toggle notification if a signed up member left your event"""
+
+        author = ctx.author
+        await ctx.message.delete(delay=5)
+
+        signout = await self.config.guild(ctx.guild).notifications_signout()
+        if str(author.id) in signout:
+            current = signout[str(author.id)]
+            if current == 1:
+                new_value = 0
+            else:
+                new_value = 1
+        else:
+            new_value = 0
+        
+        signout[str(author.id)] = new_value
+        await self.config.guild(ctx.guild).notifications_signout.set(signout)
+        if new_value == 0:
+            await ctx.channel.send("You will no longer receive a notification when someone signs out for your event", delete_after=15)
+        else:
+            await ctx.channel.send("You will receive a notification when someone signs out for your event", delete_after=15)
 
     @eventboard.group(name="edit")
     @commands.guild_only()
