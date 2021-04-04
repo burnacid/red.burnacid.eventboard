@@ -292,7 +292,7 @@ class Eventboard(commands.Cog):
             mention = get_role_mention(guild, updated_event)
             await message.edit(content=mention, embed=embed, suppress=False)
 
-    @eventboard_manage.group(name="edit")
+    @eventboard.group(name="edit")
     @commands.guild_only()
     async def eventboard_manage_edit(self, ctx: commands.Context):
         """Edit your events"""
@@ -441,6 +441,161 @@ class Eventboard(commands.Cog):
             async with self.config.guild(guild).events() as events_list:                
                 await dmchannel.send(f"Changing event description")
                 self.event_cache[guild.id][str(selected_event["post_id"])]["description"] = new_description
+                updated_event = self.event_cache[guild.id][str(selected_event["post_id"])]
+                events_list[str(selected_event["post_id"])] = updated_event
+            
+            message = await self.get_event_post(guild, updated_event["post_id"])
+            if message is None:
+                return
+
+            embed = get_event_embed(guild=guild,event=updated_event)
+            mention = get_role_mention(guild, updated_event)
+            await message.edit(content=mention, embed=embed, suppress=False)
+
+    @eventboard_manage_edit.command("maxattendees")
+    @commands.guild_only()
+    async def eventboard_manage_edit_maxattendees(self, ctx: commands.Context):
+        """Change the maximum number of attendees of an event"""
+        author = ctx.author
+        guild = ctx.guild
+
+        if author.dm_channel is None:
+            dmchannel = await author.create_dm()
+        else:
+            dmchannel = author.dm_channel
+
+        def same_author_check_dm(msg):
+            return msg.author == author and msg.channel == dmchannel
+
+        await ctx.message.delete(delay=10)
+
+        manageble_events = await self.get_manageble_events(guild, author)
+        if len(manageble_events) == 0:
+            await ctx.send("You can't manage any events", delete_after=15)
+            return
+
+        event_str = ""
+        for event in manageble_events:
+            event_str += f"{event}. {manageble_events[event]['event_name']}\n"
+
+        embed=discord.Embed(title="Select the event your like to edit the maximum number of attendees of.", description=f"Enter the number of the list. Type `None` to cancel.\n\n{event_str}", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            event_number = msg.content
+            if event_number.lower() == "none":
+                return
+
+            if event_number.isnumeric() == False:
+                embed=discord.Embed(title="Error", description="That is not a number", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+
+            if int(event_number) < 1 or int(event_number) > len(manageble_events):
+                embed=discord.Embed(title="Error", description="I can't find that event", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+            
+            selected_event = manageble_events[int(event_number)]
+
+        embed=discord.Embed(title="Enter the maximum number of attendees?", description=f"Type `0` for unlimited number of attendees.", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            new_numAttendees = msg.content
+
+            async with self.config.guild(guild).events() as events_list:                
+                await dmchannel.send(f"Changing event max attendees")
+                self.event_cache[guild.id][str(selected_event["post_id"])]["max_attendees"] = new_numAttendees
+                updated_event = self.event_cache[guild.id][str(selected_event["post_id"])]
+                events_list[str(selected_event["post_id"])] = updated_event
+            
+            message = await self.get_event_post(guild, updated_event["post_id"])
+            if message is None:
+                return
+
+            embed = get_event_embed(guild=guild,event=updated_event)
+            mention = get_role_mention(guild, updated_event)
+            await message.edit(content=mention, embed=embed, suppress=False)
+
+    @eventboard_manage_edit.command("image")
+    @commands.guild_only()
+    async def eventboard_manage_edit_image(self, ctx: commands.Context):
+        """Change the image of an event"""
+        author = ctx.author
+        guild = ctx.guild
+
+        if author.dm_channel is None:
+            dmchannel = await author.create_dm()
+        else:
+            dmchannel = author.dm_channel
+
+        def same_author_check_dm(msg):
+            return msg.author == author and msg.channel == dmchannel
+
+        await ctx.message.delete(delay=10)
+
+        manageble_events = await self.get_manageble_events(guild, author)
+        if len(manageble_events) == 0:
+            await ctx.send("You can't manage any events", delete_after=15)
+            return
+
+        event_str = ""
+        for event in manageble_events:
+            event_str += f"{event}. {manageble_events[event]['event_name']}\n"
+
+        embed=discord.Embed(title="Select the event your like to edit the image of.", description=f"Enter the number of the list. Type `None` to cancel.\n\n{event_str}", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            event_number = msg.content
+            if event_number.lower() == "none":
+                return
+
+            if event_number.isnumeric() == False:
+                embed=discord.Embed(title="Error", description="That is not a number", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+
+            if int(event_number) < 1 or int(event_number) > len(manageble_events):
+                embed=discord.Embed(title="Error", description="I can't find that event", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+            
+            selected_event = manageble_events[int(event_number)]
+
+        embed=discord.Embed(title="Enter the URL to the new image.", description=f"Type `None` for no image. Please write an URL of an image. Must be a HTTPS url.", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            image = msg.content
+            if image.lower() == "none":
+                image = None
+            else:    
+                if not await valid_image(image):
+                    embed=discord.Embed(title="Can't edit the image!", description="That URL doesn't look like a proper image.", color=0xff0000)
+                    await dmchannel.send(embed=embed)
+                    return
+
+            async with self.config.guild(guild).events() as events_list:                
+                await dmchannel.send(f"Changing event image")
+                self.event_cache[guild.id][str(selected_event["post_id"])]["image"] = image
                 updated_event = self.event_cache[guild.id][str(selected_event["post_id"])]
                 events_list[str(selected_event["post_id"])] = updated_event
             
