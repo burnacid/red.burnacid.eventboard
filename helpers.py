@@ -86,7 +86,18 @@ def get_event_embed(guild: discord.Guild, event: dict) -> discord.Embed:
     emb.add_field(name=f":white_check_mark: Accepted{attending_str}", value=attending_members, inline=True)
     emb.add_field(name=":x: Declined", value=declined_members, inline=True)
     emb.add_field(name=":grey_question: Tentative", value=maybe_members, inline=True)
-    emb.set_footer(text=f"Created by {autor_str}\nCreated on {createtime_str}")
+    if event['intervaltype'] == "0":
+        emb.set_footer(text=f"Created by {autor_str}\nCreated on {createtime_str}")
+    else:
+        if int(event['intervaltype']) == 1:
+            recurringstr = "days"
+        elif int(event['intervaltype']) == 2:
+            recurringstr = "weeks"
+        elif int(event['intervaltype']) == 3:
+            recurringstr = "months"
+
+        emb.set_footer(text=f"Created by {autor_str}\nCreated on {createtime_str}\nRepeats every {event['interval']} {recurringstr}")
+
     return emb
 
 async def create_event_reactions(guild: discord.guild, post):

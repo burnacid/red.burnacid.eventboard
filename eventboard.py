@@ -6,6 +6,7 @@ import re
 
 import contextlib
 from datetime import datetime as dt, timezone, timedelta
+from dateutil.relativedelta import relativedelta
 
 import discord
 from redbot import VersionInfo, version_info
@@ -692,6 +693,122 @@ class Eventboard(commands.Cog):
             mention = get_role_mention(guild, updated_event)
             await message.edit(content=mention, embed=embed, suppress=False)
 
+    @eventboard_manage_edit.command("recurring")
+    @commands.guild_only()
+    async def eventboard_manage_edit_recurring(self, ctx: commands.Context):
+        """Change the recurrence of an event"""
+        author = ctx.author
+        guild = ctx.guild
+
+        if author.dm_channel is None:
+            dmchannel = await author.create_dm()
+        else:
+            dmchannel = author.dm_channel
+
+        def same_author_check_dm(msg):
+            return msg.author == author and msg.channel == dmchannel
+
+        await ctx.message.delete(delay=10)
+
+        manageble_events = await self.get_manageble_events(guild, author)
+        if len(manageble_events) == 0:
+            await ctx.send("You can't manage any events", delete_after=15)
+            return
+
+        event_str = ""
+        for event in manageble_events:
+            event_str += f"{event}. {manageble_events[event]['event_name']}\n"
+
+        embed=discord.Embed(title="Select the event your like to edit the recurrence of.", description=f"Enter the number of the list. Type `None` to cancel.\n\n{event_str}", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            event_number = msg.content
+            if event_number.lower() == "none":
+                return
+
+            if event_number.isnumeric() == False:
+                embed=discord.Embed(title="Error", description="That is not a number", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+
+            if int(event_number) < 1 or int(event_number) > len(manageble_events):
+                embed=discord.Embed(title="Error", description="I can't find that event", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+            
+            selected_event = manageble_events[int(event_number)]
+
+        embed=discord.Embed(title="Enter the recurrence interval of the event.", description=f"0. Disable recurrence\n1. Daily\n2. Weekly\n3. Monthly\n\nEnter the number of the recurrence interval you like to use", color=0xffff00)
+        await dmchannel.send(embed=embed)
+        try:
+            msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+        except asyncio.TimeoutError:
+            await dmchannel.send("I'm not sure where you went. We can try this again later.")
+            return
+        else:
+            intervaltype = msg.content
+            if intervaltype.isnumeric() == False:
+                embed=discord.Embed(title="Error", description="That is not a number", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+
+            if int(intervaltype) < 0 or int(intervaltype) > 3:
+                embed=discord.Embed(title="Error", description="That is not a valid number", color=0xff0000)
+                await dmchannel.send(embed=embed)
+                return
+
+        if int(intervaltype) == 1:
+            recurringstr = "days"
+        elif int(intervaltype) == 2:
+            recurringstr = "weeks"
+        elif int(intervaltype) == 3:
+            recurringstr = "months"
+
+        if int(intervaltype) >= 1:
+            embed=discord.Embed(title=f"Every how many {recurringstr} should this event be repeated.", description=f"Please enter a number", color=0xffff00)
+            await dmchannel.send(embed=embed)
+            try:
+                msg = await self.bot.wait_for("message", check=same_author_check_dm, timeout=300)
+            except asyncio.TimeoutError:
+                await dmchannel.send("I'm not sure where you went. We can try this again later.")
+                return
+            else:
+                interval = msg.content
+                if interval.isnumeric() == False:
+                    embed=discord.Embed(title="Error", description="That is not a number", color=0xff0000)
+                    await dmchannel.send(embed=embed)
+                    return
+
+                if int(interval) <= 0:
+                    embed=discord.Embed(title="Error", description="Interval can't be lower than 0", color=0xff0000)
+                    await dmchannel.send(embed=embed)
+                    return
+
+        async with self.config.guild(guild).events() as events_list:                
+            if int(intervaltype) == 0:
+                await dmchannel.send(f"Disabling recurrence")
+                self.event_cache[guild.id][str(selected_event["post_id"])]["interval"] = 0
+            else:
+                await dmchannel.send(f"Changing recurrence to every {interval} {recurringstr}")
+                self.event_cache[guild.id][str(selected_event["post_id"])]["interval"] = interval
+
+            self.event_cache[guild.id][str(selected_event["post_id"])]["intervaltype"] = intervaltype
+            updated_event = self.event_cache[guild.id][str(selected_event["post_id"])]
+            events_list[str(selected_event["post_id"])] = updated_event
+        
+        message = await self.get_event_post(guild, updated_event["post_id"])
+        if message is None:
+            return
+
+        embed = get_event_embed(guild=guild,event=updated_event)
+        mention = get_role_mention(guild, updated_event)
+        await message.edit(content=mention, embed=embed, suppress=False)
+
     @eventboard.command(name="create")
     #@allowed_to_create()
     async def event_create(self, ctx: commands.Context):
@@ -877,7 +994,9 @@ class Eventboard(commands.Cog):
             "maybe": {},
             "image": image,
             "remindersent": 0,
-            "mention": mention
+            "mention": mention,
+            "intervaltype": 0,
+            "interval": 0
         }
 
         # Save event and output
@@ -937,14 +1056,16 @@ class Eventboard(commands.Cog):
             "event_name": f"Test event {event_id}",
             "description": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In eu nibh dui. Integer mauris urna, congue quis iaculis vitae, dapibus eu lectus. Proin efficitur, purus nec varius consectetur, urna lorem vestibulum risus, sed eleifend sem risus sed augue. Sed maximus lacinia mi hendrerit interdum. In est neque, condimentum non malesuada eget, sodales nec mi. Sed convallis augue vel lorem ultrices, sed hendrerit justo blandit. Etiam euismod aliquam eros. Aenean ut justo nec tellus venenatis luctus vel ac diam. Duis tempus metus non aliquam molestie. In vitae velit leo.",
             "max_attendees": "0",
-            "event_start": (dt.now() + timedelta(minutes=10)).timestamp(),
+            "event_start": (dt.now() + timedelta(minutes=2)).timestamp(),
             "post_id": None,
             "attending": {},
             "declined": {},
             "maybe": {},
             "image": "https://media.sproutsocial.com/uploads/2017/02/10x-featured-social-media-image-size.png",
             "remindersent": 0,
-            "mention": None
+            "mention": None,
+            "intervaltype": 0,
+            "interval": 0
         }
 
         # Save event and output
@@ -1383,6 +1504,45 @@ class Eventboard(commands.Cog):
                                 await create_event_reactions(guild, post)
 
                             continue
+
+                        # Create new event if recurring
+                        if int(event["intervaltype"]) != 0:
+                            if event["event_start"] < (dt.now()).timestamp():
+                                new_event = event
+                                # Create new date
+                                if event["intervaltype"] == "1":
+                                    new_event["event_start"] = (dt.fromtimestamp(event["event_start"]) + relativedelta(days=int(event["interval"]))).timestamp()
+                                if event["intervaltype"] == "2":
+                                    new_event["event_start"] = (dt.fromtimestamp(event["event_start"]) + relativedelta(weeks=int(event["interval"]))).timestamp()
+                                if event["intervaltype"] == "3":
+                                    new_event["event_start"] = (dt.fromtimestamp(event["event_start"]) + relativedelta(months=int(event["interval"]))).timestamp()
+
+                                # Clean attending
+                                new_event["attending"] = {}
+                                new_event["declined"] = {}
+                                new_event["maybe"] = {}
+
+                                new_event["create_time"] = dt.now().timestamp()
+
+                                # Save event and output
+                                mention = get_role_mention(guild, new_event)
+
+                                post = await guild.get_channel(event_channel).send(content=mention, embed=get_event_embed(guild, new_event))
+                                new_event["post_id"] = post.id
+
+                                async with self.config.guild(guild).events() as event_list:
+                                    event_list[post.id] = new_event
+
+                                await create_event_reactions(guild, post)
+                                self.event_cache[guild.id][str(post.id)] = new_event
+
+                                # Mark old post no longers as recurring
+                                event['interval'] = 0
+                                event['intervaltype'] = 0
+
+                                self.event_cache[guild.id][str(post_id)] = event
+                                async with self.config.guild(guild).events() as event_list:
+                                    event_list[post_id] = event
                         
                         autodelete = int(await self.config.guild(guild).autodelete())
                         if autodelete >= 0:
@@ -1395,7 +1555,7 @@ class Eventboard(commands.Cog):
                                         del event_list[str(post_id)]
                                         del self.event_cache[guild.id][str(post_id)]
                                 continue
-                            
+
                         if len(message.embeds) == 0:
                             #Embed is removed. Recreate
                             mention = get_role_mention(guild, event)
