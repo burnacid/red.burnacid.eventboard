@@ -1508,7 +1508,7 @@ class Eventboard(commands.Cog):
                         # Create new event if recurring
                         if int(event["intervaltype"]) != 0:
                             if event["event_start"] < (dt.now()).timestamp():
-                                new_event = event
+                                new_event = event.copy()
                                 # Create new date
                                 if event["intervaltype"] == "1":
                                     new_event["event_start"] = (dt.fromtimestamp(event["event_start"]) + relativedelta(days=int(event["interval"]))).timestamp()
@@ -1546,6 +1546,7 @@ class Eventboard(commands.Cog):
                         
                         autodelete = int(await self.config.guild(guild).autodelete())
                         if autodelete >= 0:
+                            checkdate = (dt.now() + timedelta(minutes=autodelete)).timestamp()
                             autodelete = autodelete * -1
                             if event["event_start"] < (dt.now() + timedelta(minutes=autodelete)).timestamp():
                                 # Event has started and can be deleted
